@@ -7,11 +7,11 @@ Each entry has the following fields (minimum requirement)
 - Email Address
 - Phone Number
 
-## Data considerations
-It is not specificed if any or all fields must be present, however we will ensure that at minimum
+## Data Considerations
+It is not specificed if any or all fields must be present, however we ensure that at minimum
 - First Name
 - Last Name
-are present.  Email and Phone will be optional.
+are present (note, done thru DB NOT NULL constraint).  Email and Phone are optional.
 We also do not support multiple Email address, nor multiple Phone numbers in this simple implementation.
 
 A future iteration might consider insisting that one of email or phone be present.

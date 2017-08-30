@@ -4,8 +4,11 @@ package main_test
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
+	_ "log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,15 +116,14 @@ func TestCreateAddressBookEntry(t *testing.T) {
     }
 }
 
-// Add as many entries as requested, minimum of 1
-func addAddressBookEntries(t *testing.T, cnt int) {
-	if 1 > cnt {
-		cnt = 1
-	}
-
-	var abe addressbook.AddressBookEntry
+// Create a list of AddressBookEntries on demand
+func generateAddressBookEntries(t *testing.T, cnt int) ([]*addressbook.AddressBookEntry) {
+	abes := []*addressbook.AddressBookEntry{}
 
 	for i := 0; i < cnt; i++ {
+		// Need to declare new ABE in the loop, since we append the reference
+		var abe addressbook.AddressBookEntry
+		abe.ID = int64(i)
 		abe.Firstname = fmt.Sprintf( "Fn_%d", i )
 		abe.Lastname  = fmt.Sprintf( "Ln_%d", i )
 		abe.Email     = fmt.Sprintf( "Fn_%d.LN_%d@example.com", i, i )
@@ -129,9 +131,23 @@ func addAddressBookEntries(t *testing.T, cnt int) {
 		rawPhone := fmt.Sprintf( "%010d", i )
 		abe.Phone     = fmt.Sprintf( "(%s)%s-%s", rawPhone[0:3], rawPhone[3:6], rawPhone[6:10] )
 
-		id, err := a.DB.AddAddressBookEntry( &abe )
+		abes = append(abes, &abe)
+	}
+	return abes
+}
+
+// Add as many entries as requested, minimum of 1
+func addAddressBookEntries(t *testing.T, cnt int) {
+	if 1 > cnt {
+		cnt = 1
+	}
+
+	var abe addressbook.AddressBookEntry
+	abes := generateAddressBookEntries(t, cnt)
+	for idx, _ := range abes {
+		id, err := a.DB.AddAddressBookEntry( abes[idx] )
 		if nil != err {
-			t.Errorf("Failed to add AddressBookEntry on index: %d, err: %v", i, err)
+			t.Errorf("Failed to add AddressBookEntry on index: %d, err: %v", idx, err)
 		}
 		// HACK, I really wanted to just comment out this line, but then get this build error:
 		//	id declared and not used
@@ -230,4 +246,93 @@ func TestDeleteAddressBookEntry(t *testing.T) {
     req, _ = http.NewRequest("GET", "/addressbookentry/1", nil)
     response = executeRequest(req)
     checkResponseCode(t, http.StatusNotFound, response.Code)
+}
+
+
+func TestCSVExport(t *testing.T) {
+	resetTable()
+
+	const numABEs = 10
+	addAddressBookEntries(t, numABEs)
+
+	req, _ := http.NewRequest("GET", "/csvexport", nil)
+	response := executeRequest(req)
+    checkResponseCode(t, http.StatusOK, response.Code)
+
+	// To be a proper test, I should extract the body of the response and verify that:
+	// - There are as many csv records as expected
+	// - The records are actually the ones we expect.
+
+	r := csv.NewReader( bytes.NewReader(response.Body.Bytes()) )
+	var count int
+	for {
+		_, err := r.Read()
+		if io.EOF == err {
+			break
+		}
+		if nil != err {
+			t.Errorf("CSV read error: %v", err)
+		}
+		count++
+	}
+	if 1+numABEs != count {
+		t.Errorf("Expected %d CSV records, got %d", numABEs, count)
+	}
+}
+
+func TestCSVImport(t *testing.T) {
+	resetTable()
+
+	// Create a request to the import endpoint that has a known number of records
+	//	- generate ABEs
+	//	- encode as CSV
+	//	- create request with these in the body
+	// Then verify those records are now in the db
+	const numABEs = 15
+	abes := generateAddressBookEntries(t, numABEs)
+
+	b := &bytes.Buffer{}
+	csvWriter := csv.NewWriter( b )
+
+	var abeStrings []string
+
+	// TODO: Extract list of names from addressbook package
+	abeHeaders := []string{
+		"ID", "Firstname", "Lastname", "Email", "Phone",
+	}
+	err := csvWriter.Write(abeHeaders)
+	if nil != err {
+		t.Errorf("CSV write header failed %v", err)
+	}
+	for _, abe := range abes {
+		abeStrings = []string{
+			fmt.Sprintf("%d", abe.ID),
+			abe.Firstname,
+			abe.Lastname,
+			abe.Email,
+			abe.Phone,
+		}
+		err = csvWriter.Write(abeStrings)
+
+		// It is an interesting problem if the CSV write fails
+		if nil != err {
+			t.Errorf("CSV write header failed %v", err)
+		}
+	}
+	csvWriter.Flush()
+
+
+	req, _ := http.NewRequest("POST", "/csvimport", b)
+	req.Header.Set("Content-Type", "text/csv")
+    response := executeRequest(req)
+	checkResponseCode(t, http.StatusOK, response.Code)
+
+	// Query DB for the count of records, should be numABEs
+	currentABEs, err := a.DB.ListAddressBookEntries()
+	if nil != err {
+		t.Errorf( "TestCSVImport:: failed to read ABEs: %v", err )
+	}
+	if numABEs != len(currentABEs) {
+		t.Errorf( "Exected %d ABEs, but found %d", numABEs, len(currentABEs) )
+	}
 }

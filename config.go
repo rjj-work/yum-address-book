@@ -3,12 +3,16 @@
 package addressbook
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -55,6 +59,9 @@ func (a *Application) initializeRoutes() {
 	a.Router.HandleFunc( "/addressbookentry/{id:[0-9]+}", a.getAddressBookEntry).Methods("GET")
 	a.Router.HandleFunc( "/addressbookentry/{id:[0-9]+}", a.updateAddressBookEntry).Methods("PUT")
 	a.Router.HandleFunc( "/addressbookentry/{id:[0-9]+}", a.deleteAddressBookEntry).Methods("DELETE")
+
+	a.Router.HandleFunc( "/csvexport", a.getAddressBookEntriesAsCSV).Methods("GET")
+	a.Router.HandleFunc( "/csvimport", a.addAddressBookEntriesFromCSV).Methods("POST")
 }
 
 
@@ -76,6 +83,7 @@ func respondWithJSON(w http.ResponseWriter, statusCode int, payload interface{})
 	w.WriteHeader(statusCode)
 	w.Write(response)
 }
+
 
 /*
 	CRUD:
@@ -199,6 +207,139 @@ func (a *Application) deleteAddressBookEntry(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	respondWithJSON(w, http.StatusOK, nil)
+}
+
+// **************** CSV Handlers ****************
+
+// Write the records out.
+// We include a header, so there will always be atleast one record returned
+func respondWithCSV(w http.ResponseWriter, statusCode int, abes []*AddressBookEntry) {
+
+	b := &bytes.Buffer{}
+	csvWriter := csv.NewWriter( b )
+
+	var abeStrings []string
+
+	// TODO: Extract list of names from addressbook package
+	abeHeaders := []string{
+		"ID", "Firstname", "Lastname", "Email", "Phone",
+	}
+	err := csvWriter.Write(abeHeaders)
+	if nil != err {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, abe := range abes {
+		abeStrings = []string{
+			fmt.Sprintf("%d", abe.ID),
+			abe.Firstname,
+			abe.Lastname,
+			abe.Email,
+			abe.Phone,
+		}
+		//log.Printf("respondWithCSV:: abe(%v)", abe)
+		//log.Printf("respondWithCSV:: abeStrings(%v)", abeStrings)
+		err = csvWriter.Write(abeStrings)
+
+		// It is an interesting problem if the CSV write fails
+		if nil != err {
+			respondWithError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	csvWriter.Flush()
+
+	w.Header().Set("Content-Type", "text/csv")
+	t := time.Now()
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment;filename=AddressBoookExport-%04d%s%02dT%02d%02d%02d.csv",
+			t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second()) )
+	w.WriteHeader(statusCode)
+	w.Write(b.Bytes())
+}
+
+func (a *Application) getAddressBookEntriesAsCSV(w http.ResponseWriter, r *http.Request) {
+	// []*AddressBookEntry
+	abes, err := a.DB.ListAddressBookEntries()
+	//log.Printf("getAddressBookEntries:: abes(%v) err(%v)", abes, err)
+	if nil != err {
+		// NO data is OK
+		if sql.ErrNoRows != err {
+			// Something bad happened
+			respondWithError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	respondWithCSV(w, http.StatusOK, abes)
+}
+
+// The request body should be our new addresses.
+// Questions to consider:
+// - Should current contents of the DB be dropped ?
+//		I.e. delete existing records before import.		NO for this iteration
+// - Will we always received a header record ?
+// - Do we assume the ID field will be present ?		Assume YES
+// - What do we do with the ID field ?	Ignore it
+// - Should the entire import be atomic ?
+//		Yes it should, but this implementation is not.
+//		I.e. errors will be noted, but not terminate the input.
+//		A better approach would be to allow specifying this behavior - but not today.
+func (a *Application) addAddressBookEntriesFromCSV(w http.ResponseWriter, r *http.Request) {
+	// []*AddressBookEntry
+	csvReader := csv.NewReader( r.Body )
+
+	var cnt, errCnt int
+	msgs := []string{}
+	for {
+		cnt++
+		// Extract a record
+		record, err := csvReader.Read()
+		if io.EOF == err {
+			break
+		}
+		if nil != err {
+			msgs = append(msgs, fmt.Sprintf("CSV read error, rcd# %d: %v", err))
+			errCnt++
+			continue
+		}
+		//log.Printf("addCSV:: record: %v", record)
+		// 1 == cnt, check for header record
+		if 1 == cnt && isABFCSVHeader(record) {
+			// skip this one
+			continue
+		}
+
+		// ! headerFound, insert record
+		_, err = a.DB.AddAddressBookEntry( &AddressBookEntry{
+			Firstname: record[1],
+			Lastname:  record[2],
+			Email:     record[3],
+			Phone:     record[4],
+			} )
+		if nil != err {
+			// TODO: Limit number of Add ABE failed msgs
+			msgs = append(msgs, fmt.Sprintf("Add ABE failed, rcd# %d: %v", err))
+			errCnt++
+		}
+	}
+
+	// Respond with message of number successful and number failed imports
+	msgs = append(msgs, fmt.Sprintf("Processed %d input records.  Errors: %d", cnt, errCnt))
+
+	if cnt == errCnt {
+		respondWithJSON(w, http.StatusBadRequest, msgs)
+		return
+	}
+	if 0 < errCnt {	// We know errCnt < cnt, unless something really odd happened
+		respondWithJSON(w, http.StatusPartialContent, msgs)
+		return
+	}
+	respondWithJSON(w, http.StatusOK, msgs)
+}
+
+// TODO: verify all expected header fields are present in the expected order
+func isABFCSVHeader(rcd []string) (bool) {
+	return (5 <= len(rcd)) && ("ID" == rcd[0])
 }
 
 
