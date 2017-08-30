@@ -14,9 +14,10 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-var createTableStatements = []string{
-	`CREATE DATABASE IF NOT EXISTS yum_addressbook DEFAULT CHARACTER SET = 'utf8' DEFAULT COLLATE 'utf8_general_ci';`,
-	`USE yum_addressbook;`,
+/*var createTableStatements = []string{
+	`CREATE DATABASE IF NOT EXISTS ` + schemaName() +
+		` DEFAULT CHARACTER SET = 'utf8' DEFAULT COLLATE 'utf8_general_ci';`,
+	`USE ` + schemaName() + `;`,
 	`CREATE TABLE IF NOT EXISTS addressbookentries (
 		id INT UNSIGNED NOT NULL AUTO_INCREMENT,
 		firstname VARCHAR(255) NOT NULL,
@@ -27,10 +28,11 @@ var createTableStatements = []string{
 		PRIMARY KEY (id)
 	);`,
 }
-
+*/
 // mysqlDB persists AddressBookEntries to a MySQL instance.
 type mysqlDB struct {
 	conn *sql.DB
+	Config   MySQLConfig
 
 	list     *sql.Stmt
 	insert   *sql.Stmt
@@ -65,8 +67,37 @@ type MySQLConfig struct {
 	UnixSocket string
 }
 
+func (c MySQLConfig) createDatabaseStatement() string {
+	return `CREATE DATABASE IF NOT EXISTS ` + c.Schema +
+			` DEFAULT CHARACTER SET = 'utf8' DEFAULT COLLATE 'utf8_general_ci';`
+}
+
+func (c MySQLConfig) useDatabaseStatement() string {
+	return `USE ` + c.Schema + `;`
+}
+
+func (c MySQLConfig) createTableStatement() string {
+	return `CREATE TABLE IF NOT EXISTS addressbookentries (
+				id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+				firstname VARCHAR(255) NOT NULL,
+				lastname VARCHAR(255) NOT NULL,
+				email VARCHAR(255) NULL,
+				phone TEXT NULL,
+				createdDate datetime DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (id)
+			);`
+}
+
+func (c MySQLConfig) createTableStatements() []string {
+	return []string{
+		c.createDatabaseStatement(),
+		c.useDatabaseStatement(),
+		c.createTableStatement(),
+	}
+}
+
 // dataStoreName returns a connection string suitable for sql.Open.
-func (c MySQLConfig) dataStoreName(databaseName string) string {
+func (c MySQLConfig) dataStoreName() string {
 	var cred string
 	// [username[:password]@]
 	if c.Username != "" {
@@ -78,9 +109,9 @@ func (c MySQLConfig) dataStoreName(databaseName string) string {
 	}
 
 	if c.UnixSocket != "" {
-		return fmt.Sprintf("%sunix(%s)/%s", cred, c.UnixSocket, databaseName)
+		return fmt.Sprintf("%sunix(%s)/%s", cred, c.UnixSocket, c.Schema)
 	}
-	return fmt.Sprintf("%stcp([%s]:%d)/%s", cred, c.Host, c.Port, databaseName)
+	return fmt.Sprintf("%stcp([%s]:%d)/%s", cred, c.Host, c.Port, c.Schema)
 }
 
 // newMySQLDB creates a new AddressBookDatabase backed by a given MySQL server.
@@ -90,7 +121,7 @@ func newMySQLDB(config MySQLConfig) (AddressBookDatabase, error) {
 		return nil, err
 	}
 
-	conn, err := sql.Open("mysql", config.dataStoreName("yum_addressbook"))
+	conn, err := sql.Open("mysql", config.dataStoreName())
 	if err != nil {
 		return nil, fmt.Errorf("mysql: could not get a connection: %v", err)
 	}
@@ -102,6 +133,7 @@ func newMySQLDB(config MySQLConfig) (AddressBookDatabase, error) {
 	db := &mysqlDB{
 		conn: conn,
 	}
+
 
 	// Prepared statements. The actual SQL queries are in the code near the
 	// relevant method (e.g. AddAddressBookEntry).
@@ -269,7 +301,10 @@ func (db *mysqlDB) UpdateAddressBookEntry(abe *AddressBookEntry) error {
 
 // ensureTableExists checks the table exists. If not, it creates it.
 func (config MySQLConfig) ensureTableExists() error {
-	conn, err := sql.Open("mysql", config.dataStoreName(""))
+	// When first checking if the DB connectivity, do not include a schema name
+	cc := config
+	cc.Schema = ""
+	conn, err := sql.Open("mysql", cc.dataStoreName())
 	if err != nil {
 		return fmt.Errorf("mysql: could not get a connection: %v", err)
 	}
@@ -281,11 +316,11 @@ func (config MySQLConfig) ensureTableExists() error {
 			"could be bad address, or this address is not whitelisted for access.")
 	}
 
-	if _, err := conn.Exec("USE yum_addressbook"); err != nil {
+	if _, err := conn.Exec(config.useDatabaseStatement()); err != nil {
 		// MySQL error 1049 is "database does not exist"
 		if mErr, ok := err.(*mysql.MySQLError); ok && mErr.Number == 1049 {
 			fmt.Printf("ensureTableExists:: USE connection 2 err(%v)\n", mErr)
-			return createTable(conn)
+			return createTable(conn, config.createTableStatements())
 		}
 		return fmt.Errorf("mysql: USE error %v", err)
 	}
@@ -293,7 +328,7 @@ func (config MySQLConfig) ensureTableExists() error {
 	if _, err := conn.Exec("DESCRIBE addressbookentries"); err != nil {
 		// MySQL error 1146 is "table does not exist"
 		if mErr, ok := err.(*mysql.MySQLError); ok && mErr.Number == 1146 {
-			return createTable(conn)
+			return createTable(conn, config.createTableStatements())
 		}
 		// Unknown error.
 		return fmt.Errorf("mysql: could not connect to the database: %v", err)
@@ -302,8 +337,8 @@ func (config MySQLConfig) ensureTableExists() error {
 }
 
 // createTable creates the table, and if necessary, the database.
-func createTable(conn *sql.DB) error {
-	for _, stmt := range createTableStatements {
+func createTable(conn *sql.DB, dbStatements []string) error {
+	for _, stmt := range dbStatements {
 		fmt.Printf("createTable:: Exec(%v)\n", stmt )
 		_, err := conn.Exec(stmt)
 		if err != nil {
