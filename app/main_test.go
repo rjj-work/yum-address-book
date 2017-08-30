@@ -76,9 +76,9 @@ func TestGetNonExistentAddressBookEntry(t *testing.T) {
 
     var m map[string]string
     json.Unmarshal(response.Body.Bytes(), &m)
-    expected := "AddressBookEntry not found"
+    expected := fmt.Sprintf("AddressBookEntry with ID (%d) not found.", 1)
     if m["error"] != expected {
-        t.Errorf("Expected the 'error' key of the response to be set to '%s'. Got '%s'", expected, m["error"])
+        t.Errorf("Expected 'error' key of the response to be set to '%s'. Got '%s'", expected, m["error"])
     }
 }
 
@@ -133,7 +133,9 @@ func addAddressBookEntries(t *testing.T, cnt int) {
 		if nil != err {
 			t.Errorf("Failed to add AddressBookEntry on index: %d, err: %v", i, err)
 		}
-		fmt.Printf( "i: Added ID: %d, ABE: %v\n", id, abe )
+		// HACK, I really wanted to just comment out this line, but then get this build error:
+		//	id declared and not used
+		if 1==0 {fmt.Printf( "i: Added ID: %d, ABE: %v\n", id, abe )}
 	}
 }
 
@@ -208,6 +210,11 @@ func TestUpdateAddressBookEntry(t *testing.T) {
 
 
 // DELETE /addressbookentry/1
+//	- reset table to empty
+//	- add 1 new row
+//	- read the row to verify there
+//	- delete the row
+//	- try to read row, should not be there
 func TestDeleteAddressBookEntry(t *testing.T) {
     resetTable()
     addAddressBookEntries(t, 1)
@@ -218,7 +225,6 @@ func TestDeleteAddressBookEntry(t *testing.T) {
 
     req, _ = http.NewRequest("DELETE", "/addressbookentry/1", nil)
     response = executeRequest(req)
-
     checkResponseCode(t, http.StatusOK, response.Code)
 
     req, _ = http.NewRequest("GET", "/addressbookentry/1", nil)

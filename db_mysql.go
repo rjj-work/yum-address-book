@@ -10,6 +10,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	_ "log"
 	"github.com/go-sql-driver/mysql"
 )
 
@@ -147,8 +148,9 @@ func scanAddressBookEntry(s rowScanner) (*AddressBookEntry, error) {
 		lastname    sql.NullString
 		email       sql.NullString
 		phone       sql.NullString
+		createdDate sql.NullString
 	)
-	if err := s.Scan(&id, &firstname, &lastname, &email, &phone); err != nil {
+	if err := s.Scan(&id, &firstname, &lastname, &email, &phone, &createdDate); err != nil {
 		return nil, err
 	}
 
@@ -172,7 +174,8 @@ func (db *mysqlDB) ListAddressBookEntries() ([]*AddressBookEntry, error) {
 	}
 	defer rows.Close()
 
-	var AddressBookEntries []*AddressBookEntry
+	// Initialize the slice to an empty slice rather than a nil pointer
+	AddressBookEntries := []*AddressBookEntry{}
 	for rows.Next() {
 		abe, err := scanAddressBookEntry(rows)
 		if err != nil {
@@ -191,12 +194,30 @@ const getStatement = "SELECT * FROM addressbookentries WHERE id = ?"
 // GetAddressBookEntry retrieves a addressbook by its ID.
 func (db *mysqlDB) GetAddressBookEntry(id int64) (*AddressBookEntry, error) {
 	abe, err := scanAddressBookEntry(db.get.QueryRow(id))
+	// There is a design trade-off here I need to think about
+	//	Should the error be found and "handled" at this level, or should
+	//	it just be returned as is, and allow the client decide what it means.
+	// This becomes apparent in the application level trying to decide to return either
+	//		http.StatusNotFound vs. http.StatusInternalServerError
+	//	without a clear agreement between the DB layer and the App layer as to
+	//	what errors, and how they will be signaled.
+	//	The ultimate flexibility of the cleint response is impacted.
+	if nil != err {
+		//log.Printf("mysql: AddressBookEntry with ID (%d) not found, err(%v)", id, err)
+		return nil, err
+	}
+	/*
+	// This code has been replaced by the simple *if* above, after musing about the
+	//	design implementation - but most importantly while trying to get the
+	//	Test* functions to behave in an acceptable way.
+	//
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("mysql: could not find address book entry with id %d", id)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("mysql: could not get address book entry: %v", err)
 	}
+	*/
 	return abe, nil
 }
 

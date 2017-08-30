@@ -57,12 +57,27 @@ git clone https://github.com/rjj-work/yum-address-book.git
 ```
 ## Start it up
 
+
 ## Go testing
 - Export some environment variables used during testing.
 ```bash
 export TEST_YUM_ADDRESSBOOK_DB_USERNAME=gouser
 export TEST_YUM_ADDRESSBOOK_DB_PASSWORD=test123
 export TEST_YUM_ADDRESSBOOK_DB_NAME=yum_addressbook
+```
+
+## Normal Startup
+- export variables used when not running tests
+```bash
+export YUM_ADDRESSBOOK_DB_USERNAME=gouser
+export YUM_ADDRESSBOOK_DB_PASSWORD=test123
+export YUM_ADDRESSBOOK_DB_NAME=yum_addressbook
+export YUM_ADDRESSBOOK_HOST_PORT=":8080"
+```
+- Start the system
+```bash
+cd app
+go run main.go
 ```
 
 
